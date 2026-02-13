@@ -43,7 +43,8 @@ No-email mode still enables HTTPS using certbot registration without email, enab
 - Singbox -> `/singbox/`
 - Clash Meta -> `/clashmeta/`
 - V2Ray -> `/sub/`
-- Retry upstream fetch and keep in-memory cache with stale-while-revalidate.
+- Stateless — no caching, every request fetches fresh from upstream.
+- Retry upstream fetch on failure.
 
 ## Manual Run
 ```bash

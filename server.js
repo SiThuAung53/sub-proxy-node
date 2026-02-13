@@ -1,7 +1,7 @@
 const http = require("http");
-const express = require("express");
 const { Agent, fetch } = require("undici");
 
+/* ── .env loader ─────────────────────────────────────────────── */
 function loadDotEnv(path = ".env") {
   const fs = require("fs");
   if (!fs.existsSync(path)) return;
@@ -15,41 +15,41 @@ function loadDotEnv(path = ".env") {
     if (key && process.env[key] === undefined) process.env[key] = value;
   }
 }
-
 loadDotEnv();
 
+/* ── Config ──────────────────────────────────────────────────── */
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
-const TIMEOUT = Number(process.env.UPSTREAM_TIMEOUT || 15) * 1000;
+const TIMEOUT = Number(process.env.UPSTREAM_TIMEOUT || 10) * 1000;
 const RETRIES = Number(process.env.UPSTREAM_RETRIES || 1);
-const CACHE_TTL = Number(process.env.CACHE_TTL_SECONDS || 60);
-const CACHE_STALE_TTL = Number(process.env.CACHE_STALE_TTL_SECONDS || 240);
-const SWR_ENABLED = ["1", "true", "yes"].includes((process.env.CACHE_STALE_WHILE_REVALIDATE || "1").toLowerCase());
-const LOG_UPSTREAM = ["1", "true", "yes"].includes((process.env.LOG_UPSTREAM || "0").toLowerCase());
-const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 2000);
-const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 400);
+const LOG_UPSTREAM = ["1", "true", "yes"].includes(
+  (process.env.LOG_UPSTREAM || "0").toLowerCase()
+);
+const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 2048);
+const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 512);
 
-const PROTOCOL_RE = /^(?:#.*\n)?\s*((?:vless|vmess|trojan|ss|ssr|tuic|hysteria2?):\/\/[^\s]+)/gim;
-const SINGBOX_UA_TOKENS = ["sing-box", "singbox", "sfa", "sfm"];
-const CLASHMETA_UA_TOKENS = ["clash-verge", "clash meta", "clash-meta", "mihomo", "clash"];
-const V2RAY_UA_TOKENS = ["v2ray", "v2rayng", "v2rayn"];
+/* ── Regex & client detection tokens ─────────────────────────── */
+const PROTOCOL_RE =
+  /^(?:#.*\n)?\s*((?:vless|vmess|trojan|ss|ssr|tuic|hysteria2?):\/\/[^\s]+)/gim;
+const SINGBOX_UA = ["sing-box", "singbox", "sfa", "sfm"];
+const CLASHMETA_UA = ["clash-verge", "clash meta", "clash-meta", "mihomo", "clash"];
+const V2RAY_UA = ["v2ray", "v2rayng", "v2rayn"];
 
-const app = express();
-app.set("x-powered-by", false);
-
+/* ── Undici agent — high concurrency, pipelining enabled ─────── */
 const agent = new Agent({
   connections: MAX_CONNECTIONS,
-  keepAliveMaxTimeout: 20000,
-  keepAliveTimeout: 20000,
-  pipelining: 1,
+  keepAliveMaxTimeout: 30_000,
+  keepAliveTimeout: 15_000,
+  pipelining: 10,
 });
 
-const cache = new Map();
-const inFlight = new Map();
-const refreshing = new Set();
-let cacheHits = 0;
-let cacheMisses = 0;
+/* ── Metrics counters ────────────────────────────────────────── */
+let totalRequests = 0;
+let activeRequests = 0;
+let peakActive = 0;
+let totalErrors = 0;
 
+/* ── Helpers ─────────────────────────────────────────────────── */
 function looksLikeBase64(s) {
   const str = String(s || "").trim();
   if (!str || str.length % 4 !== 0) return false;
@@ -60,8 +60,7 @@ function maybeDecodeBase64(text) {
   if (!looksLikeBase64(text)) return text;
   try {
     const decoded = Buffer.from(text, "base64").toString("utf8");
-    if (decoded.includes("://")) return decoded;
-    return text;
+    return decoded.includes("://") ? decoded : text;
   } catch {
     return text;
   }
@@ -74,60 +73,48 @@ function extractLinks(text) {
   while ((m = PROTOCOL_RE.exec(text)) !== null) {
     if (m[1]) matches.push(m[1].trim());
   }
-  if (matches.length > 0) return `${matches.join("\n")}\n`;
-  return text;
+  return matches.length > 0 ? `${matches.join("\n")}\n` : text;
 }
 
-function detectClient(userAgent = "", clientHint = "") {
-  const hint = String(clientHint || "").trim().toLowerCase();
-  if (["singbox", "clashmeta", "v2ray"].includes(hint)) return hint;
-  if (["clash", "meta", "clash-meta", "mihomo"].includes(hint)) return "clashmeta";
-  if (["v2rayng", "v2rayn"].includes(hint)) return "v2ray";
-  if (hint === "sing-box") return "singbox";
+function detectClient(ua = "", hint = "") {
+  const h = String(hint || "").trim().toLowerCase();
+  if (h === "singbox" || h === "sing-box") return "singbox";
+  if (["clashmeta", "clash", "meta", "clash-meta", "mihomo"].includes(h)) return "clashmeta";
+  if (["v2ray", "v2rayng", "v2rayn"].includes(h)) return "v2ray";
 
-  const ua = String(userAgent || "").toLowerCase();
-  if (SINGBOX_UA_TOKENS.some((t) => ua.includes(t))) return "singbox";
-  if (CLASHMETA_UA_TOKENS.some((t) => ua.includes(t))) return "clashmeta";
-  if (V2RAY_UA_TOKENS.some((t) => ua.includes(t))) return "v2ray";
+  const u = String(ua || "").toLowerCase();
+  if (SINGBOX_UA.some((t) => u.includes(t))) return "singbox";
+  if (CLASHMETA_UA.some((t) => u.includes(t))) return "clashmeta";
+  if (V2RAY_UA.some((t) => u.includes(t))) return "v2ray";
   return "default";
 }
 
-function rewriteUpstreamForClient(upstream, clientName) {
+function rewriteForClient(upstream, client) {
   let parsed;
   try {
     parsed = new URL(upstream);
   } catch {
     return upstream;
   }
-
   if (!parsed.pathname.includes("/auto/")) return upstream;
-  let targetPath = null;
-  if (clientName === "singbox") targetPath = "/singbox/";
-  else if (clientName === "clashmeta") targetPath = "/clashmeta/";
-  else if (clientName === "v2ray") targetPath = "/sub/";
-  else return upstream;
-
-  parsed.pathname = parsed.pathname.replace("/auto/", targetPath);
+  const map = { singbox: "/singbox/", clashmeta: "/clashmeta/", v2ray: "/sub/" };
+  const target = map[client];
+  if (!target) return upstream;
+  parsed.pathname = parsed.pathname.replace("/auto/", target);
   return parsed.toString();
 }
 
-function buildCacheKey(url, base64Mode) {
-  return `${url}|b64=${base64Mode ? 1 : 0}`;
-}
-
-async function fetchUpstreamText(url) {
+/* ── Upstream fetch with retry ───────────────────────────────── */
+async function fetchUpstream(url) {
   let lastErr;
-  for (let i = 0; i <= Math.max(0, RETRIES); i += 1) {
+  for (let i = 0; i <= Math.max(0, RETRIES); i++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), TIMEOUT);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT);
       const resp = await fetch(url, {
         method: "GET",
-        headers: {
-          "user-agent": "sub-proxy-node/1.0",
-          accept: "text/plain,text/html,*/*",
-        },
-        signal: controller.signal,
+        headers: { "user-agent": "sub-proxy-node/1.0", accept: "text/plain,text/html,*/*" },
+        signal: ac.signal,
         dispatcher: agent,
       });
       clearTimeout(timer);
@@ -138,135 +125,121 @@ async function fetchUpstreamText(url) {
       }
       return await resp.text();
     } catch (e) {
+      clearTimeout(timer);
       lastErr = e;
-      if (i < RETRIES) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
+      if (i < RETRIES) await new Promise((r) => setTimeout(r, 300));
     }
   }
   throw lastErr || new Error("upstream request failed");
 }
 
+/* ── Build subscription (fetch → decode → extract → encode) ── */
 async function buildSubscription(url, base64Mode) {
-  const text = await fetchUpstreamText(url);
-  const decoded = maybeDecodeBase64(text);
+  const raw = await fetchUpstream(url);
+  const decoded = maybeDecodeBase64(raw);
   const links = extractLinks(decoded);
   if (!base64Mode) return links;
-  return `${Buffer.from(links, "utf8").toString("base64")}\n`;
+  return Buffer.from(links, "utf8").toString("base64") + "\n";
 }
 
-function writeCache(key, body) {
-  const now = Date.now();
-  cache.set(key, {
-    body,
-    createdAt: now,
-    expiresAt: now + CACHE_TTL * 1000,
-    staleUntil: now + (CACHE_TTL + CACHE_STALE_TTL) * 1000,
-  });
-}
-
-async function refreshInBackground(key, url, base64Mode) {
-  if (refreshing.has(key)) return;
-  refreshing.add(key);
-  try {
-    const body = await buildSubscription(url, base64Mode);
-    writeCache(key, body);
-    if (LOG_UPSTREAM) console.log(`[sub-proxy] background refresh success key=${key.slice(0, 120)}`);
-  } catch (e) {
-    console.log(`[sub-proxy] background refresh failed: ${e.message || e}`);
-  } finally {
-    refreshing.delete(key);
-  }
-}
-
-async function getOrBuildSubscription(url, base64Mode) {
-  const key = buildCacheKey(url, base64Mode);
-  const now = Date.now();
-  const cached = cache.get(key);
-
-  if (cached && cached.expiresAt > now) {
-    cacheHits += 1;
-    return cached.body;
-  }
-
-  if (cached && cached.staleUntil > now && SWR_ENABLED) {
-    cacheHits += 1;
-    refreshInBackground(key, url, base64Mode).catch(() => {});
-    return cached.body;
-  }
-
-  if (inFlight.has(key)) return inFlight.get(key);
-
-  const p = (async () => {
-    cacheMisses += 1;
-    const body = await buildSubscription(url, base64Mode);
-    writeCache(key, body);
-    return body;
-  })();
-
-  inFlight.set(key, p);
-  try {
-    return await p;
-  } finally {
-    inFlight.delete(key);
-  }
-}
-
-app.get("/health", (_req, res) => {
-  res.type("text/plain").send("ok\n");
-});
-
-app.get("/metrics", (_req, res) => {
-  const total = cacheHits + cacheMisses;
-  const ratio = total === 0 ? 0 : Number((cacheHits / total).toFixed(4));
-  res.json({
-    cache_size: cache.size,
-    inflight_keys: inFlight.size,
-    cache_hits: cacheHits,
-    cache_misses: cacheMisses,
-    cache_hit_ratio: ratio,
-  });
-});
-
-app.get(["/", "/sub"], async (req, res) => {
-  const url = String(req.query.url || "");
-  if (!url) {
-    res.status(400).type("text/plain").send("missing upstream URL. use /sub?url=<encoded_url>\n");
+/* ── Raw HTTP request handler (no Express overhead) ──────────── */
+function handleRequest(req, res) {
+  // Health check — fast path
+  if (req.url === "/health") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("ok\n");
     return;
   }
 
-  const base64Mode = ["1", "true", "yes"].includes(String(req.query.base64 || "0").toLowerCase());
-  const clientName = detectClient(req.headers["user-agent"] || "", String(req.query.client || ""));
-  const rewrittenUrl = rewriteUpstreamForClient(url, clientName);
-
-  try {
-    if (LOG_UPSTREAM && rewrittenUrl !== url) {
-      console.log(`[sub-proxy] rewrite client=${clientName} from=${url} to=${rewrittenUrl}`);
-    }
-    const body = await getOrBuildSubscription(rewrittenUrl, base64Mode);
-    res.setHeader("Cache-Control", "no-store");
-    res.type("text/plain").send(body);
-  } catch (e) {
-    const status = Number(e && e.status) || 502;
-    if (status >= 400 && status < 600 && e.message && e.message.startsWith("upstream http error")) {
-      console.log(`[sub-proxy] ${e.message} for url=${rewrittenUrl}`);
-      res.status(502).type("text/plain").send(`${e.message}\n`);
-      return;
-    }
-    console.log(`[sub-proxy] upstream/internal error for url=${rewrittenUrl}: ${e.message || e}`);
-    res.status(502).type("text/plain").send(`upstream error: ${e.message || e}\n`);
+  // Metrics
+  if (req.url === "/metrics") {
+    const mem = process.memoryUsage();
+    const body = JSON.stringify({
+      total_requests: totalRequests,
+      active_requests: activeRequests,
+      peak_active: peakActive,
+      total_errors: totalErrors,
+      memory_rss_mb: Math.round(mem.rss / 1048576),
+      memory_heap_used_mb: Math.round(mem.heapUsed / 1048576),
+      memory_heap_total_mb: Math.round(mem.heapTotal / 1048576),
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(body);
+    return;
   }
-});
 
-const server = http.createServer(app);
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
-server.requestTimeout = 0;
-server.maxConnections = MAX_CONNECTIONS + MAX_KEEPALIVE;
+  // Only GET /sub or GET / with ?url=
+  if (req.method !== "GET") {
+    res.writeHead(405, { "content-type": "text/plain" });
+    res.end("method not allowed\n");
+    return;
+  }
+
+  const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const pathname = parsed.pathname;
+  if (pathname !== "/" && pathname !== "/sub") {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found\n");
+    return;
+  }
+
+  const url = parsed.searchParams.get("url") || "";
+  if (!url) {
+    res.writeHead(400, { "content-type": "text/plain" });
+    res.end("missing upstream URL. use /sub?url=<encoded_url>\n");
+    return;
+  }
+
+  const base64Mode = ["1", "true", "yes"].includes(
+    (parsed.searchParams.get("base64") || "0").toLowerCase()
+  );
+  const clientName = detectClient(
+    req.headers["user-agent"] || "",
+    parsed.searchParams.get("client") || ""
+  );
+  const rewrittenUrl = rewriteForClient(url, clientName);
+
+  // Track concurrency
+  totalRequests++;
+  activeRequests++;
+  if (activeRequests > peakActive) peakActive = activeRequests;
+
+  if (LOG_UPSTREAM && rewrittenUrl !== url) {
+    console.log(`[sub-proxy] rewrite client=${clientName} ${url} -> ${rewrittenUrl}`);
+  }
+
+  buildSubscription(rewrittenUrl, base64Mode)
+    .then((body) => {
+      if (res.destroyed) return;
+      res.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(body);
+    })
+    .catch((e) => {
+      totalErrors++;
+      if (res.destroyed) return;
+      const msg = e.message || String(e);
+      console.log(`[sub-proxy] error url=${rewrittenUrl}: ${msg}`);
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end(`upstream error: ${msg}\n`);
+    })
+    .finally(() => {
+      activeRequests--;
+    });
+}
+
+/* ── Server ──────────────────────────────────────────────────── */
+const server = http.createServer(handleRequest);
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+server.requestTimeout = 60_000;
+server.maxConnections = 0; // unlimited — let OS handle it
 
 server.listen(PORT, HOST, () => {
   console.log(
-    `sub-proxy node startup host=${HOST} port=${PORT} timeout=${TIMEOUT / 1000}s retries=${RETRIES} cache_ttl=${CACHE_TTL}s stale_ttl=${CACHE_STALE_TTL}s max_conn=${MAX_CONNECTIONS}`
+    `sub-proxy node startup host=${HOST} port=${PORT} timeout=${TIMEOUT / 1000}s ` +
+      `retries=${RETRIES} max_conn=${MAX_CONNECTIONS} pipelining=10`
   );
 });
-
