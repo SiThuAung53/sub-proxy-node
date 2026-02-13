@@ -1,4 +1,4 @@
-﻿# Subscription Proxy (Node.js)
+# Subscription Proxy (Node.js)
 
 High-concurrency subscription relay/converter for V2Ray/Hiddify-compatible clients.
 
