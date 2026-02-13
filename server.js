@@ -27,6 +27,8 @@ const LOG_UPSTREAM = ["1", "true", "yes"].includes(
 );
 const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 2048);
 const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 512);
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_REQUESTS || 200);
+const MAX_QUEUE = Number(process.env.MAX_QUEUE_SIZE || 500);
 
 /* ── Regex & client detection tokens ─────────────────────────── */
 const PROTOCOL_RE =
@@ -48,6 +50,46 @@ let totalRequests = 0;
 let activeRequests = 0;
 let peakActive = 0;
 let totalErrors = 0;
+let totalDropped = 0;
+let totalQueued = 0;
+
+/* ── Concurrency limiter with queue ──────────────────────────── */
+const queue = [];
+
+function tryDrain() {
+  while (queue.length > 0 && activeRequests < MAX_CONCURRENT) {
+    const next = queue.shift();
+    if (!next.res.destroyed) {
+      processRequest(next.url, next.base64Mode, next.rewrittenUrl, next.res);
+    } else {
+      activeRequests--; // was counted when queued
+    }
+  }
+}
+
+function processRequest(url, base64Mode, rewrittenUrl, res) {
+  buildSubscription(rewrittenUrl, base64Mode)
+    .then((body) => {
+      if (res.destroyed) return;
+      res.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(body);
+    })
+    .catch((e) => {
+      totalErrors++;
+      if (res.destroyed) return;
+      const msg = e.message || String(e);
+      console.log(`[sub-proxy] error url=${rewrittenUrl}: ${msg}`);
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end(`upstream error: ${msg}\n`);
+    })
+    .finally(() => {
+      activeRequests--;
+      tryDrain();
+    });
+}
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 function looksLikeBase64(s) {
@@ -157,8 +199,13 @@ function handleRequest(req, res) {
     const body = JSON.stringify({
       total_requests: totalRequests,
       active_requests: activeRequests,
+      queued_requests: queue.length,
       peak_active: peakActive,
       total_errors: totalErrors,
+      total_dropped: totalDropped,
+      total_queued: totalQueued,
+      max_concurrent: MAX_CONCURRENT,
+      max_queue: MAX_QUEUE,
       memory_rss_mb: Math.round(mem.rss / 1048576),
       memory_heap_used_mb: Math.round(mem.heapUsed / 1048576),
       memory_heap_total_mb: Math.round(mem.heapTotal / 1048576),
@@ -199,7 +246,6 @@ function handleRequest(req, res) {
   );
   const rewrittenUrl = rewriteForClient(url, clientName);
 
-  // Track concurrency
   totalRequests++;
   activeRequests++;
   if (activeRequests > peakActive) peakActive = activeRequests;
@@ -208,26 +254,22 @@ function handleRequest(req, res) {
     console.log(`[sub-proxy] rewrite client=${clientName} ${url} -> ${rewrittenUrl}`);
   }
 
-  buildSubscription(rewrittenUrl, base64Mode)
-    .then((body) => {
-      if (res.destroyed) return;
-      res.writeHead(200, {
-        "content-type": "text/plain; charset=utf-8",
-        "cache-control": "no-store",
-      });
-      res.end(body);
-    })
-    .catch((e) => {
-      totalErrors++;
-      if (res.destroyed) return;
-      const msg = e.message || String(e);
-      console.log(`[sub-proxy] error url=${rewrittenUrl}: ${msg}`);
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`upstream error: ${msg}\n`);
-    })
-    .finally(() => {
-      activeRequests--;
+  // Concurrency control: process now, queue, or drop
+  if (activeRequests <= MAX_CONCURRENT) {
+    processRequest(url, base64Mode, rewrittenUrl, res);
+  } else if (queue.length < MAX_QUEUE) {
+    totalQueued++;
+    queue.push({ url, base64Mode, rewrittenUrl, res });
+  } else {
+    // Server overloaded — drop request
+    totalDropped++;
+    activeRequests--;
+    res.writeHead(503, {
+      "content-type": "text/plain",
+      "retry-after": "5",
     });
+    res.end("server busy, try again later\n");
+  }
 }
 
 /* ── Server ──────────────────────────────────────────────────── */

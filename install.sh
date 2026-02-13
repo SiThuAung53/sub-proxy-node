@@ -67,8 +67,27 @@ sed -i 's/^PORT=.*/PORT=8080/' .env || true
 grep -q '^HOST=' .env || echo 'HOST=127.0.0.1' >> .env
 grep -q '^PORT=' .env || echo 'PORT=8080' >> .env
 
+# Detect available RAM and set limits
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+# Reserve 256MB for OS+nginx, split rest among PM2 workers
+NUM_CORES=$(nproc)
+AVAILABLE_MB=$((TOTAL_RAM_MB - 256))
+PER_WORKER_MB=$((AVAILABLE_MB / NUM_CORES))
+# Clamp between 128MB–512MB per worker
+if [ "$PER_WORKER_MB" -lt 128 ]; then PER_WORKER_MB=128; fi
+if [ "$PER_WORKER_MB" -gt 512 ]; then PER_WORKER_MB=512; fi
+# Node heap = 80% of per-worker limit
+NODE_HEAP_MB=$((PER_WORKER_MB * 80 / 100))
+
+echo "RAM=${TOTAL_RAM_MB}MB cores=${NUM_CORES} per_worker=${PER_WORKER_MB}MB node_heap=${NODE_HEAP_MB}MB"
+
 pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
-pm2 start "$APP_DIR/server.js" -i max --name "$APP_NAME" --update-env
+pm2 start "$APP_DIR/server.js" \
+  -i max \
+  --name "$APP_NAME" \
+  --update-env \
+  --max-memory-restart "${PER_WORKER_MB}M" \
+  --node-args="--max-old-space-size=${NODE_HEAP_MB}"
 pm2 save
 
 PM2_STARTUP_CMD="$(pm2 startup systemd -u root --hp /root | tail -n 1)"
