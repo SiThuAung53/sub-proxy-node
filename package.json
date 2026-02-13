@@ -1,0 +1,17 @@
+{
+  "name": "sub-proxy-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "High-concurrency subscription proxy for V2Ray/Hiddify clients",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "undici": "^6.20.1"
+  }
+}
