@@ -1,0 +1,14 @@
+{
+  "cloudflare_api_token": "YOUR_CLOUDFLARE_API_TOKEN",
+  "zone_id": "YOUR_ZONE_ID",
+  "domain": "nextv2.com",
+  "ips": [
+    "84.32.22.177",
+    "84.32.23.13",
+    "84.32.22.190",
+    "84.32.23.59"
+  ],
+  "check_interval": 60,
+  "timeout": 5,
+  "min_healthy_ips": 1
+}

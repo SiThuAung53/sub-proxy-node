@@ -83,3 +83,21 @@ Optional:
 - `/<upstream_url>` — shortest format
 - `/sub/<upstream_url>` — short format
 - `/sub?url=<encoded_url>` — query format
+
+## IP Health Monitor
+
+Auto-detect blocked IPs from Myanmar and remove/add them from Cloudflare DNS.
+
+1. Get Cloudflare API token: https://dash.cloudflare.com/profile/api-tokens (use "Edit zone DNS" template)
+2. Get zone ID: Cloudflare dashboard → your domain → right sidebar
+3. Setup:
+```bash
+cp monitor.example.json monitor.json
+# Edit monitor.json with your token, zone_id, domain, and IPs
+```
+4. Run on a PC inside Myanmar:
+```bash
+python monitor.py
+```
+
+The script checks every 60 seconds. Dead IPs are removed from DNS, recovered IPs are re-added automatically.
