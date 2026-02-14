@@ -61,13 +61,23 @@ pm2 startup
 ```
 
 ## Use in client
-`https://YOUR_DOMAIN/sub?url=https%3A%2F%2Fk129.nextprivate.cc%2FcLefwonRiP%2F1e049a8f-5563-4834-b8e5-093e448855fc%2Fauto%2F%3Fasn%3Dunknown`
+
+Short URL (recommended):
+```
+https://YOUR_DOMAIN/sub/https://k129.nextprivate.cc/cLefwonRiP/YOUR_UUID/auto/?asn=unknown#K129
+```
+
+Query URL (also works):
+```
+https://YOUR_DOMAIN/sub?url=https%3A%2F%2Fk129.nextprivate.cc%2FcLefwonRiP%2FYOUR_UUID%2Fauto%2F%3Fasn%3Dunknown
+```
 
 Optional:
-- Base64 output: add `&base64=1`
-- Force client type: add `&client=singbox` or `&client=clashmeta` or `&client=v2ray`
+- Base64 output: add `?base64=1` (short) or `&base64=1` (query)
+- Force client type: add `?client=singbox` or `&client=clashmeta` or `&client=v2ray`
 
 ## Endpoints
 - `/health`
 - `/metrics`
-- `/sub?url=<encoded_url>`
+- `/sub/<upstream_url>` — short format
+- `/sub?url=<encoded_url>` — query format

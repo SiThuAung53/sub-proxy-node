@@ -215,7 +215,6 @@ function handleRequest(req, res) {
     return;
   }
 
-  // Only GET /sub or GET / with ?url=
   if (req.method !== "GET") {
     res.writeHead(405, { "content-type": "text/plain" });
     res.end("method not allowed\n");
@@ -224,16 +223,25 @@ function handleRequest(req, res) {
 
   const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = parsed.pathname;
-  if (pathname !== "/" && pathname !== "/sub") {
+
+  // Extract upstream URL from either:
+  //   Short: /sub/https://upstream.com/path?x=1#frag
+  //   Query: /sub?url=https://upstream.com/path
+  let url = "";
+  const shortMatch = req.url.match(/^\/sub\/(https?:\/\/.+)/);
+  if (shortMatch) {
+    url = shortMatch[1];
+  } else if (pathname === "/" || pathname === "/sub") {
+    url = parsed.searchParams.get("url") || "";
+  } else {
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found\n");
     return;
   }
 
-  const url = parsed.searchParams.get("url") || "";
   if (!url) {
     res.writeHead(400, { "content-type": "text/plain" });
-    res.end("missing upstream URL. use /sub?url=<encoded_url>\n");
+    res.end("missing upstream URL.\nuse: /sub/https://upstream.com/path\n or: /sub?url=<encoded_url>\n");
     return;
   }
 
