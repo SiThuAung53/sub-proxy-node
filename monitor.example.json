@@ -10,5 +10,7 @@
   ],
   "check_interval": 60,
   "timeout": 5,
-  "min_healthy_ips": 1
+  "min_healthy_ips": 1,
+  "telegram_bot_token": "",
+  "telegram_chat_id": ""
 }
