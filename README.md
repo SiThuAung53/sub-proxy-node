@@ -64,11 +64,12 @@ pm2 startup
 
 Short URL (recommended):
 ```
-https://YOUR_DOMAIN/sub/https://k129.nextprivate.cc/cLefwonRiP/YOUR_UUID/auto/?asn=unknown#K129
+https://YOUR_DOMAIN/https://k129.nextprivate.cc/cLefwonRiP/YOUR_UUID/auto/?asn=unknown#K129
 ```
 
-Query URL (also works):
+Also works:
 ```
+https://YOUR_DOMAIN/sub/https://k129.nextprivate.cc/cLefwonRiP/YOUR_UUID/auto/?asn=unknown#K129
 https://YOUR_DOMAIN/sub?url=https%3A%2F%2Fk129.nextprivate.cc%2FcLefwonRiP%2FYOUR_UUID%2Fauto%2F%3Fasn%3Dunknown
 ```
 
@@ -79,5 +80,6 @@ Optional:
 ## Endpoints
 - `/health`
 - `/metrics`
+- `/<upstream_url>` — shortest format
 - `/sub/<upstream_url>` — short format
 - `/sub?url=<encoded_url>` — query format

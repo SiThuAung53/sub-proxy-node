@@ -224,13 +224,17 @@ function handleRequest(req, res) {
   const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = parsed.pathname;
 
-  // Extract upstream URL from either:
-  //   Short: /sub/https://upstream.com/path?x=1#frag
-  //   Query: /sub?url=https://upstream.com/path
+  // Extract upstream URL from:
+  //   Shortest: /https://upstream.com/path?x=1#frag
+  //   Short:    /sub/https://upstream.com/path?x=1#frag
+  //   Query:    /sub?url=https://upstream.com/path
   let url = "";
-  const shortMatch = req.url.match(/^\/sub\/(https?:\/\/.+)/);
-  if (shortMatch) {
-    url = shortMatch[1];
+  const directMatch = req.url.match(/^\/(https?:\/\/.+)/);
+  const subMatch = req.url.match(/^\/sub\/(https?:\/\/.+)/);
+  if (subMatch) {
+    url = subMatch[1];
+  } else if (directMatch) {
+    url = directMatch[1];
   } else if (pathname === "/" || pathname === "/sub") {
     url = parsed.searchParams.get("url") || "";
   } else {
@@ -241,7 +245,7 @@ function handleRequest(req, res) {
 
   if (!url) {
     res.writeHead(400, { "content-type": "text/plain" });
-    res.end("missing upstream URL.\nuse: /sub/https://upstream.com/path\n or: /sub?url=<encoded_url>\n");
+    res.end("missing upstream URL.\nuse: /https://upstream.com/path\n or: /sub?url=<encoded_url>\n");
     return;
   }
 
