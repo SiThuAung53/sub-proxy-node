@@ -25,10 +25,10 @@ const RETRIES = Number(process.env.UPSTREAM_RETRIES || 1);
 const LOG_UPSTREAM = ["1", "true", "yes"].includes(
   (process.env.LOG_UPSTREAM || "0").toLowerCase()
 );
-const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 2048);
-const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 512);
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_REQUESTS || 200);
-const MAX_QUEUE = Number(process.env.MAX_QUEUE_SIZE || 500);
+const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 256);
+const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 64);
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_REQUESTS || 50);
+const MAX_QUEUE = Number(process.env.MAX_QUEUE_SIZE || 100);
 
 /* ── Regex & client detection tokens ─────────────────────────── */
 const PROTOCOL_RE =
@@ -37,12 +37,12 @@ const SINGBOX_UA = ["sing-box", "singbox", "sfa", "sfm"];
 const CLASHMETA_UA = ["clash-verge", "clash meta", "clash-meta", "mihomo", "clash"];
 const V2RAY_UA = ["v2ray", "v2rayng", "v2rayn"];
 
-/* ── Undici agent — high concurrency, pipelining enabled ─────── */
+/* ── Undici agent — controlled concurrency ────────────────────── */
 const agent = new Agent({
   connections: MAX_CONNECTIONS,
-  keepAliveMaxTimeout: 30_000,
-  keepAliveTimeout: 15_000,
-  pipelining: 10,
+  keepAliveMaxTimeout: 20_000,
+  keepAliveTimeout: 10_000,
+  pipelining: 1,
 });
 
 /* ── Metrics counters ────────────────────────────────────────── */
@@ -282,6 +282,6 @@ server.maxConnections = 0; // unlimited — let OS handle it
 server.listen(PORT, HOST, () => {
   console.log(
     `sub-proxy node startup host=${HOST} port=${PORT} timeout=${TIMEOUT / 1000}s ` +
-      `retries=${RETRIES} max_conn=${MAX_CONNECTIONS} pipelining=10`
+      `retries=${RETRIES} max_conn=${MAX_CONNECTIONS} max_concurrent=${MAX_CONCURRENT}`
   );
 });

@@ -69,21 +69,29 @@ grep -q '^PORT=' .env || echo 'PORT=8080' >> .env
 
 # Detect available RAM and set limits
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-# Reserve 256MB for OS+nginx, split rest among PM2 workers
 NUM_CORES=$(nproc)
-AVAILABLE_MB=$((TOTAL_RAM_MB - 256))
-PER_WORKER_MB=$((AVAILABLE_MB / NUM_CORES))
-# Clamp between 128MB–512MB per worker
+
+# Use 2 workers (enough for proxy workload, saves CPU)
+# Only use more on large servers (8+ cores, 4GB+ RAM)
+WORKERS=2
+if [ "$NUM_CORES" -ge 8 ] && [ "$TOTAL_RAM_MB" -ge 4096 ]; then
+  WORKERS=4
+fi
+
+# Reserve 300MB for OS+nginx, split rest among workers
+AVAILABLE_MB=$((TOTAL_RAM_MB - 300))
+PER_WORKER_MB=$((AVAILABLE_MB / WORKERS))
+# Clamp between 128MB–400MB per worker
 if [ "$PER_WORKER_MB" -lt 128 ]; then PER_WORKER_MB=128; fi
-if [ "$PER_WORKER_MB" -gt 512 ]; then PER_WORKER_MB=512; fi
+if [ "$PER_WORKER_MB" -gt 400 ]; then PER_WORKER_MB=400; fi
 # Node heap = 80% of per-worker limit
 NODE_HEAP_MB=$((PER_WORKER_MB * 80 / 100))
 
-echo "RAM=${TOTAL_RAM_MB}MB cores=${NUM_CORES} per_worker=${PER_WORKER_MB}MB node_heap=${NODE_HEAP_MB}MB"
+echo "RAM=${TOTAL_RAM_MB}MB cores=${NUM_CORES} workers=${WORKERS} per_worker=${PER_WORKER_MB}MB node_heap=${NODE_HEAP_MB}MB"
 
 pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
 pm2 start "$APP_DIR/server.js" \
-  -i max \
+  -i "$WORKERS" \
   --name "$APP_NAME" \
   --update-env \
   --max-memory-restart "${PER_WORKER_MB}M" \
