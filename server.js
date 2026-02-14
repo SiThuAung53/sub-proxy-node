@@ -20,15 +20,15 @@ loadDotEnv();
 /* ── Config ──────────────────────────────────────────────────── */
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
-const TIMEOUT = Number(process.env.UPSTREAM_TIMEOUT || 10) * 1000;
-const RETRIES = Number(process.env.UPSTREAM_RETRIES || 1);
+const TIMEOUT = Number(process.env.UPSTREAM_TIMEOUT || 15) * 1000;
+const RETRIES = Number(process.env.UPSTREAM_RETRIES || 2);
 const LOG_UPSTREAM = ["1", "true", "yes"].includes(
   (process.env.LOG_UPSTREAM || "0").toLowerCase()
 );
 const MAX_CONNECTIONS = Number(process.env.HTTP_MAX_CONNECTIONS || 256);
 const MAX_KEEPALIVE = Number(process.env.HTTP_MAX_KEEPALIVE_CONNECTIONS || 64);
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_REQUESTS || 50);
-const MAX_QUEUE = Number(process.env.MAX_QUEUE_SIZE || 100);
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_REQUESTS || 200);
+const MAX_QUEUE = Number(process.env.MAX_QUEUE_SIZE || 300);
 
 /* ── Regex & client detection tokens ─────────────────────────── */
 const PROTOCOL_RE =
